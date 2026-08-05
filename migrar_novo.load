@@ -1,0 +1,3 @@
+LOAD DATABASE
+FROM access:///mnt/c/Users/User/Documents/ACCESS/NOVODESPESAS.mdb
+INTO postgresql://postgres:00025G&c@172.30.144.1:5432/controldesp

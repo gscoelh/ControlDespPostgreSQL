@@ -1,0 +1,141 @@
+import tkinter as tk
+from tkinter import messagebox, ttk
+import sql.sql_contaspocusto as sql
+
+def tela_contaspocusto():
+
+    # Guarda o registro original selecionado no Treeview
+    registro_original = {"TPCUSTO": None, "CONTA": None}
+
+    def atualizar_lista():
+        for item in tree.get_children():
+            tree.delete(item)
+
+        for r in sql.listar():
+            tree.insert("", tk.END, values=(r[0], r[1], r[2]))
+
+    def preencher_campos(event):
+        item = tree.selection()
+        if item:
+            valores = tree.item(item, "values")
+
+            # POPULA OS TEXTBOX COM O ITEM SELECIONADO
+            entry_tpCusto.delete(0, tk.END)
+            entry_tpCusto.insert(0, valores[0])
+
+            entry_Conta.delete(0, tk.END)
+            entry_Conta.insert(0, valores[1])
+
+            entry_percentual.delete(0, tk.END)
+            entry_percentual.insert(0, valores[2])
+
+            # Guarda o registro original para validação futura
+            registro_original["TPCUSTO"] = valores[0]
+            registro_original["CONTA"] = valores[1]
+
+    def inserir():
+        if not messagebox.askyesno("Confirmação", "Deseja inserir este registro?"):
+            return
+
+        tp = entry_tpCusto.get()
+        conta = entry_Conta.get()
+        perc = entry_percentual.get()
+
+        if sql.existe(tp, conta):
+            messagebox.showwarning("Duplicado", "Já existe um registro com esta chave.")
+            return
+
+        ok = sql.inserir(tp, conta, perc)
+        if ok:
+            atualizar_lista()
+            messagebox.showinfo("OK", "Registro inserido com sucesso.")
+        else:
+            messagebox.showerror("Erro", "Não foi possível inserir o registro.")
+
+    def atualizar():
+        if not messagebox.askyesno("Confirmação", "Deseja atualizar este registro?"):
+            return
+
+        tp_original = registro_original["TPCUSTO"]
+        conta_original = registro_original["CONTA"]
+
+        if tp_original is None or conta_original is None:
+            messagebox.showwarning("Erro", "Selecione um registro antes de atualizar.")
+            return
+
+        if not sql.existe(tp_original, conta_original):
+            messagebox.showerror("Inexistente", "O registro original não existe mais.")
+            return
+
+        tp_novo = entry_tpCusto.get()
+        conta_novo = entry_Conta.get()
+        perc_novo = entry_percentual.get()
+
+        if (tp_novo != tp_original or conta_novo != conta_original) and sql.existe(tp_novo, conta_novo):
+            messagebox.showwarning("Duplicado", "Já existe um registro com esta nova chave.")
+            return
+
+        sql.excluir(tp_original, conta_original)
+        sql.inserir(tp_novo, conta_novo, perc_novo)
+
+        atualizar_lista()
+        messagebox.showinfo("OK", "Registro atualizado com sucesso.")
+
+        registro_original["TPCUSTO"] = None
+        registro_original["CONTA"] = None
+
+    def excluir():
+        if not messagebox.askyesno("Confirmação", "Deseja excluir este registro?"):
+            return
+
+        tp = entry_tpCusto.get()
+        conta = entry_Conta.get()
+
+        if not sql.existe(tp, conta):
+            messagebox.showerror("Inexistente", "Este registro não existe.")
+            return
+
+        sql.excluir(tp, conta)
+        atualizar_lista()
+        messagebox.showinfo("OK", "Registro excluído com sucesso.")
+
+    janela = tk.Toplevel()
+    janela.title("Cadastro de Tipos de Custo")
+    janela.geometry("600x600")
+
+    tk.Label(janela, text="Código Tipo de Custo").pack()
+    entry_tpCusto = tk.Entry(janela)
+    entry_tpCusto.pack()
+
+    tk.Label(janela, text="Conta Contábil envolvida").pack()
+    entry_Conta = tk.Entry(janela)
+    entry_Conta.pack()
+
+    tk.Label(janela, text="Percentual").pack()
+    entry_percentual = tk.Entry(janela)
+    entry_percentual.pack()
+
+    tk.Button(janela, text="Inserir", command=inserir).pack(pady=5)
+    tk.Button(janela, text="Atualizar", command=atualizar).pack(pady=5)
+    tk.Button(janela, text="Excluir", command=excluir).pack(pady=5)
+
+    # FRAME PARA TREEVIEW + SCROLLBAR
+    frame_tree = tk.Frame(janela)
+    frame_tree.pack(pady=10)
+
+    colunas = ("TPCUSTO", "CONTA", "PERCENTUAL")
+    tree = ttk.Treeview(frame_tree, columns=colunas, show="headings", height=15)
+
+    for col in colunas:
+        tree.heading(col, text=col)
+        tree.column(col, width=150)
+
+    scrollbar = ttk.Scrollbar(frame_tree, orient="vertical", command=tree.yview)
+    tree.configure(yscrollcommand=scrollbar.set)
+
+    tree.grid(row=0, column=0)
+    scrollbar.grid(row=0, column=1, sticky="ns")
+
+    tree.bind("<<TreeviewSelect>>", preencher_campos)
+
+    atualizar_lista()

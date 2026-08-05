@@ -1,0 +1,197 @@
+import os
+import time
+import shutil
+import re
+import requests
+import psycopg
+from datetime import datetime
+from tqdm import tqdm
+
+# CONFIGURAÇÕES
+PASTA_NOVA = r"C:\Users\User\OneDrive\Documents\ComprovantePagamentos_teste"  # pasta base
+CONN_INFO = {
+    "host": "localhost",
+    "port": 5432,
+    "dbname": "controldesp_desenv",
+    "user": "postgres",
+    "password": "00025G&c",
+}
+
+LOG_ARQUIVO = "log_migracao_comprovantes.txt"
+
+
+def log(msg):
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    linha = f"[{timestamp}] {msg}"
+    print(linha)
+    with open(LOG_ARQUIVO, "a", encoding="utf-8") as f:
+        f.write(linha + "\n")
+
+
+def conectar():
+    return psycopg.connect(**CONN_INFO)
+
+
+def obter_lancamentos_antigos():
+    """
+    Busca todos os lançamentos que ainda apontam para caminhos antigos
+    (Google Drive / Access) e não estão na pasta nova.
+    """
+    conn = conectar()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DATALANCTO, CONTA, HISTORICO, COMPLHISTORICO, VALLANCTO, COMPROVANTEWEB
+        FROM LANCAMENTOS
+        WHERE COMPROVANTEWEB IS NOT NULL
+          AND COMPROVANTEWEB <> ''
+          AND COMPROVANTEWEB NOT LIKE %s
+    """, (PASTA_NOVA + '%',))
+
+    registros = cur.fetchall()
+    conn.close()
+    return registros
+
+
+def atualizar_caminho_comprovante(caminho_antigo, caminho_novo):
+    """
+    Atualiza o caminho do comprovante no banco.
+    """
+    conn = conectar()
+    cur = conn.cursor()
+
+    cur.execute("""
+        UPDATE LANCAMENTOS
+        SET COMPROVANTEWEB = %s
+        WHERE COMPROVANTEWEB = %s
+    """, (caminho_novo, caminho_antigo))
+
+    conn.commit()
+    conn.close()
+
+
+def detectar_extensao(resposta):
+    ct = resposta.headers.get("Content-Type", "").lower()
+
+    if "jpeg" in ct:
+        return ".jpg"
+    if "png" in ct:
+        return ".png"
+    if "pdf" in ct:
+        return ".pdf"
+    if "octet-stream" in ct:
+        return ".bin"
+
+    return ".dat"  # fallback
+
+
+def baixar_do_google_drive(url, destino_pasta):
+    """
+    Baixa um arquivo do Google Drive usando o ID do link.
+    Retorna o caminho do arquivo salvo ou None se falhar.
+    """
+    padrao = r"id=([A-Za-z0-9_\-]+)"
+    m = re.search(padrao, url)
+    if not m:
+        log(f"[ERRO] Não foi possível extrair ID do link: {url}")
+        return None
+
+    file_id = m.group(1)
+    download_url = f"https://drive.google.com/uc?export=download&id={file_id}"
+
+    try:
+        log(f"[INFO] Baixando do Drive: {download_url}")
+
+        resposta = requests.get(download_url, stream=True)
+        if resposta.status_code != 200:
+            log(f"[ERRO] Falha no download (HTTP {resposta.status_code})")
+            return None
+
+        ext = detectar_extensao(resposta)
+        nome_arquivo = f"{file_id}{ext}"
+
+        os.makedirs(destino_pasta, exist_ok=True)
+        caminho_final = os.path.join(destino_pasta, nome_arquivo)
+
+        with open(caminho_final, "wb") as f:
+            for chunk in resposta.iter_content(chunk_size=8192):
+                if chunk:
+                    f.write(chunk)
+
+        log(f"[OK] Download concluído: {caminho_final}")
+        return caminho_final
+
+    except Exception as e:
+        log(f"[ERRO] Falha ao baixar do Drive: {e}")
+        return None
+
+
+def criar_pasta_ano_mes(data):
+    ano = data.year
+    mes = f"{data.month:02d}"
+
+    pasta_ano = os.path.join(PASTA_NOVA, str(ano))
+    pasta_mes = os.path.join(pasta_ano, mes)
+
+    os.makedirs(pasta_mes, exist_ok=True)
+    return pasta_mes
+
+
+def copiar_arquivo(caminho_antigo, data):
+    """
+    Copia arquivo local OU baixa arquivo do Google Drive.
+    Organiza por ano/mês.
+    """
+    pasta_destino = criar_pasta_ano_mes(data)
+
+    # Caso seja link do Google Drive
+    if isinstance(caminho_antigo, str) and caminho_antigo.startswith("http"):
+        return baixar_do_google_drive(caminho_antigo, pasta_destino)
+
+    # Caso seja arquivo local
+    if not os.path.exists(caminho_antigo):
+        log(f"[FALHA] Arquivo não existe: {caminho_antigo}")
+        return None
+
+    nome = os.path.basename(caminho_antigo)
+    novo_caminho = os.path.join(pasta_destino, nome)
+
+    if os.path.exists(novo_caminho):
+        log(f"[INFO] Arquivo já existe na pasta nova: {novo_caminho}")
+        return novo_caminho
+
+    try:
+        shutil.copy(caminho_antigo, novo_caminho)
+        log(f"[OK] Copiado: {caminho_antigo} -> {novo_caminho}")
+        return novo_caminho
+    except Exception as e:
+        log(f"[ERRO] Falha ao copiar {caminho_antigo}: {e}")
+        return None
+
+
+def migrar():
+    log("=== INÍCIO MIGRAÇÃO DE COMPROVANTES ===")
+
+    registros = obter_lancamentos_antigos()
+    log(f"Total de lançamentos a migrar: {len(registros)}")
+
+    for data, conta, hist, compl, valor, compweb in tqdm(registros, desc="Migrando comprovantes"):
+        log(f"\nProcessando: {data} | {conta} | {hist} | {compl} | {valor} | {compweb}")
+
+        if not compweb:
+            log("[SKIP] Sem caminho de comprovante.")
+            continue
+
+        novo_caminho = copiar_arquivo(compweb, data)
+        if novo_caminho:
+            atualizar_caminho_comprovante(compweb, novo_caminho)
+            log(f"[OK] Caminho atualizado no banco: {novo_caminho}")
+        else:
+            log("[FALHA] Não foi possível migrar este comprovante.")
+
+    log("=== FIM MIGRAÇÃO DE COMPROVANTES ===")
+
+
+if __name__ == "__main__":
+    migrar()
+
