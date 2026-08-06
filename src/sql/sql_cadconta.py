@@ -122,3 +122,17 @@ def listar_por_roteiro(rot):
 
     return cur.fetchall()
 
+def buscar_descr(cod_conta):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT DESCRCTA
+        FROM CADCONTA
+        WHERE CODCTA = %s
+    """, (cod_conta,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    return row[0] if row else ""

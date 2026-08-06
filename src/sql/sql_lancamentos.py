@@ -86,5 +86,39 @@ def excluir_lancamento_duplo(datalancto, conta, hist, compl, valor, comprovante)
         AND SINALLANCTO = 'D'
     """, (datalancto, conta, hist, compl, valor, comprovante))
 
-    conn.commit()
+    conn.commit() 
     conn.close()
+
+def listar_todos_ordenados():
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT 
+            CONTA,
+            DATALANCTO,
+            VALLANCTO,
+            SINALLANCTO
+        FROM LANCAMENTOS
+        WHERE DATALANCTO IS NOT NULL
+        ORDER BY CONTA, DATALANCTO
+    """)
+
+    rows = cur.fetchall()
+    conn.close()
+
+    resultado = []
+    for r in rows:
+        valor = r[2]
+        if valor is None:
+            valor = 0
+
+        resultado.append({
+            "conta": r[0],
+            "data": r[1],
+            "valor": valor,
+            "tipo": r[3]
+        })
+
+    return resultado
+

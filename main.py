@@ -1,6 +1,8 @@
 from src.database.connection import get_connection
 import tkinter as tk
 from tkinter import messagebox
+from src.telas.tela_saldos import tela_saldos
+
 
 
 
@@ -87,6 +89,8 @@ def main():
     # === MENU MOVIMENTO ===
     menu_movimento = tk.Menu(menubar, tearoff=0)
     menu_movimento.add_command(label="Lançamentos Diários", command=tela_lancamentos)
+    menu_movimento.add_command(label="Saldos Diários", command=tela_saldos)
+
 
     menubar.add_cascade(label="Movimento", menu=menu_movimento)
 
