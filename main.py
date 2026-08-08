@@ -1,10 +1,16 @@
 from src.database.connection import get_connection
 import tkinter as tk
 from tkinter import messagebox
-from src.telas.tela_saldos import tela_saldos
 
+# Tela de saldos mensais (nova)
+from src.telas.tela_saldos import tela_saldos_mensais
 
-
+# Funções de manutenção de saldos
+from src.utils.processa_saldos import (
+    recompor_saldos,
+    limpar_base,
+    mostrar_saldos_iniciais_faltantes
+)
 
 # Telas já existentes
 from src.telas.tela_cadctaagr import tela_cadctaagr
@@ -66,18 +72,14 @@ def main():
     root.title("Sistema de Cadastros")
     root.geometry("600x400")
 
-    # === MENU PRINCIPAL ===
     menubar = tk.Menu(root)
 
     # === MENU CADASTRO ===
     menu_cadastro = tk.Menu(menubar, tearoff=0)
-
-    # Cadastros já existentes
     menu_cadastro.add_command(label="Cadastro de Grupos de Contas", command=tela_cadctaagr)
     menu_cadastro.add_command(label="Cadastro de Tipos de Custo (ContasPorCusto)", command=tela_contaspocusto)
     menu_cadastro.add_command(label="Cadastro de Contas", command=tela_cadconta)
 
-    # Novos cadastros
     menu_cadastro.add_separator()
     menu_cadastro.add_command(label="Cadastro de Custos", command=tela_custo)
     menu_cadastro.add_command(label="Cadastro de Roteiro - Capa", command=tela_roteirocapa)
@@ -89,13 +91,14 @@ def main():
     # === MENU MOVIMENTO ===
     menu_movimento = tk.Menu(menubar, tearoff=0)
     menu_movimento.add_command(label="Lançamentos Diários", command=tela_lancamentos)
-    menu_movimento.add_command(label="Saldos Diários", command=tela_saldos)
-
-
+    menu_movimento.add_command(label="Saldos Mensais", command=tela_saldos_mensais)
     menubar.add_cascade(label="Movimento", menu=menu_movimento)
 
     # === MENU AJUDA ===
     menu_ajuda = tk.Menu(menubar, tearoff=0)
+    menu_ajuda.add_command(label="Reprocessar Saldos", command=recompor_saldos)
+    menu_ajuda.add_command(label="Limpar Base de Saldos", command=limpar_base)
+    menu_ajuda.add_command(label="Verificar Saldos Iniciais", command=mostrar_saldos_iniciais_faltantes)
     menu_ajuda.add_command(label="Escolher Ambiente", command=lambda: escolher_ambiente(root))
     menubar.add_cascade(label="Ajuda", menu=menu_ajuda)
 
@@ -104,14 +107,11 @@ def main():
     menu_finalizar.add_command(label="Sair do Sistema", command=root.destroy)
     menubar.add_cascade(label="Finalizar", menu=menu_finalizar)
 
-    # Aplica o menu na janela
     root.config(menu=menubar)
 
-    # Mensagem inicial
     label = tk.Label(root, text="Bem-vindo ao Sistema de Cadastros", font=("Arial", 16))
     label.pack(pady=40)
 
-    # Alerta de ambiente
     if config.get_alerta() == "SIM":
         ambiente = config.get_modo()
         aviso = tk.Label(root, text=f"AMBIENTE ATUAL: {ambiente}", fg="red", font=("Arial", 12))
@@ -123,13 +123,4 @@ def main():
 if __name__ == "__main__":
     main()
 
-#def main():
-#    try:
-#        conn = get_connection()
-#        print("Conexao com PostgreSQL estabelecida com sucesso!")
-#        conn.close()
-#    except Exception as e:
-#        print("erro", repr(e))
-#
-#if __name__ == "__main__":
-#    main()
+
