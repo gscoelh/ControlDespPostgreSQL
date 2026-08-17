@@ -136,3 +136,31 @@ def buscar_descr(cod_conta):
     conn.close()
 
     return row[0] if row else ""
+def buscar_dia_corte(conta, anomes):
+    """
+    Retorna o dia de corte da conta para o mês AAAAMM.
+    Se não existir, retorna None.
+    """
+    try:
+        conn = get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT datacorte
+            FROM cartoes_corte
+            WHERE conta = %s AND anomes = %s
+            LIMIT 1
+        """, (conta, anomes))
+
+        row = cur.fetchone()
+        conn.close()
+
+        if row:
+            return row[0]  # dia de corte
+        else:
+            return None
+
+    except Exception as e:
+        print("Erro buscar_dia_corte:", e)
+        return None
+

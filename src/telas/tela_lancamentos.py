@@ -16,9 +16,42 @@ import src.sql.sql_cadconta as sql_conta
 
 from src.core import config
 
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
+
 PASTA_COMPROVANTES = config.get_pasta_comprovantes()
 AUTOCOMP = set(config.get_complementos())
+def verificar_competencia_cartao(conta, anomes):
+    """
+    Verifica se existe dia de corte cadastrado para a conta no mês AAAAMM.
+    Só aplica para contas de cartão: 50200, 50300, 50500.
+    """
+    # contas que usam dia de corte
+    CONTAS_CARTAO = {"50200", "50300", "50500"}
 
+    # se não for cartão → sempre retorna True (não exige dia de corte)
+    if str(conta) not in CONTAS_CARTAO:
+        return True
+
+    try:
+        conn = sql_conta.get_connection()
+        cur = conn.cursor()
+
+        cur.execute("""
+            SELECT 1
+            FROM cartoes_corte
+            WHERE conta = %s AND anomes = %s
+            LIMIT 1
+        """, (conta, anomes))
+
+        existe = cur.fetchone() is not None
+        conn.close()
+        return existe
+
+    except Exception as e:
+        messagebox.showerror("Erro", f"Erro ao verificar competência:\n{e}")
+        return False
 
 def tela_lancamentos():
 
@@ -145,6 +178,35 @@ def tela_lancamentos():
     tk.Label(frame_totais, text="Saldo Final").grid(row=0, column=4, padx=10)
     entry_saldo_final = tk.Entry(frame_totais, width=15, state="readonly")
     entry_saldo_final.grid(row=0, column=5)
+    # ===========================
+    # VERIFICAR COMPETÊNCIA AO ENTRAR NA TELA
+    # ===========================
+    def verificar_competencia_inicial():
+        comp = entry_comp.get().strip()
+        if len(comp) != 6:
+            return
+
+        mes = comp[:2]
+        ano = comp[2:]
+        anomes = ano + mes  # formato AAAAMM
+
+        # conta do roteiro selecionado
+        if not combo_roteiro.get():
+            return
+
+        rot = combo_roteiro.get().split(" - ")[0]
+        conta_capa = sql_capa.buscar_conta(rot)
+
+        if not verificar_competencia_cartao(conta_capa, anomes):
+            messagebox.showwarning(
+                "Competência não configurada",
+                f"Não existe dia de corte cadastrado para a conta {conta_capa} no mês {anomes}.\n"
+                f"Cadastre o dia de corte antes de lançar."
+            )
+            return
+
+    # chama automaticamente ao abrir
+    janela.after(300, verificar_competencia_inicial)
 
     # ===========================
     # FILTRO POR DATAREGISTRO
@@ -405,6 +467,23 @@ def tela_lancamentos():
     # CARREGAR LANÇAMENTOS
     # ===========================
     def carregar():
+    # verificar competência antes de carregar
+        comp = entry_comp.get().strip()
+        if len(comp) == 6:
+            mes = comp[:2]
+            ano = comp[2:]
+            anomes = ano + mes
+
+            rot = combo_roteiro.get().split(" - ")[0]
+            conta_capa = sql_capa.buscar_conta(rot)
+
+            if not verificar_competencia_cartao(conta_capa, anomes):
+                messagebox.showwarning(
+                    "Competência não configurada",
+                    f"Não existe dia de corte cadastrado para a conta {conta_capa} no mês {anomes}."
+                )
+                return
+    
         carregar_comprovantes()
 
         for item in tree.get_children():
@@ -475,6 +554,8 @@ def tela_lancamentos():
     tree.heading("VALOR", text="VALOR", command=lambda: treeview_sort_column(tree, "VALOR", False))
     tree.heading("DATAREGISTRO", text="DATAREGISTRO", command=ordenar_dataregistro)
     tree.heading("COMPROVANTE", text="COMPROVANTE", command=lambda: treeview_sort_column(tree, "COMPROVANTE", False))
+ 
+
 
     # ===========================
     # SELECIONAR LINHA
@@ -527,11 +608,19 @@ def tela_lancamentos():
     # ABRIR COMPROVANTE + MIGRAÇÃO AUTOMÁTICA
     # ===========================
     def abrir_comprovante(event):
-        item = tree.selection()
-        if not item:
+        # identificar linha e coluna clicada
+        item = tree.identify_row(event.y)
+        coluna = tree.identify_column(event.x)
+
+        # coluna "#7" = COMPROVANTE
+        if coluna != "#7":
             return
 
-        valores = tree.item(item[0], "values")
+        if not item:
+            messagebox.showwarning("Comprovante", "Nenhum comprovante associado.")
+            return
+
+        valores = tree.item(item, "values")
         caminho = valores[7]
 
         if not caminho:
@@ -539,24 +628,45 @@ def tela_lancamentos():
             return
 
         caminho = caminho.strip()
+        print("Caminho recebido:", caminho)
 
-        if caminho.startswith("http://") or caminho.startswith("https://"):
-            try:
-                webbrowser.open(caminho)
-            except Exception as e:
-                messagebox.showerror("Erro", f"Não foi possível abrir o link:\n{e}")
+        # GOOGLE DRIVE (formato antigo)
+        if caminho.startswith("open?id="):
+            drive_id = caminho.replace("open?id=", "")
+            url = f"https://drive.google.com/uc?id={drive_id}"
+            print("Abrindo Drive:", url)
+            webbrowser.open(url)
             return
 
+        # GOOGLE DRIVE (completo)
+        if "drive.google.com" in caminho:
+            print("Abrindo Drive completo:", caminho)
+            webbrowser.open(caminho)
+            return
+
+        # ONEDRIVE
+        if "onedrive.live.com" in caminho or "1drv.ms" in caminho:
+            print("Abrindo OneDrive:", caminho)
+            webbrowser.open(caminho)
+            return
+
+        # HTTP/HTTPS genérico
+        if caminho.startswith("http://") or caminho.startswith("https://"):
+            print("Abrindo link HTTP:", caminho)
+            webbrowser.open(caminho)
+            return
+
+        # ARQUIVO LOCAL
         if os.path.exists(caminho):
-            try:
-                os.startfile(caminho)
-            except Exception as e:
-                messagebox.showerror("Erro", f"Não foi possível abrir o arquivo:\n{e}")
+            print("Abrindo arquivo local:", caminho)
+            os.startfile(caminho)
             return
 
         messagebox.showerror("Erro", f"O caminho informado não existe:\n{caminho}")
-
-    tree.bind("<Double-1>", abrir_comprovante)
+    # ===========================
+    # AGORA SIM — bind fora da função
+    # ===========================
+    tree.bind("<Double-1>", abrir_comprovante)   
 
     # ===========================
     # EXCLUIR LANÇAMENTO
@@ -586,6 +696,9 @@ def tela_lancamentos():
     # ===========================
     def gravar_linha():
         try:
+            # ===========================
+            # CAMPOS BÁSICOS
+            # ===========================
             dia = txt_dia.get().strip()
             conta_spread = txt_conta.get().strip()
             hist = txt_hist.get().strip()
@@ -593,12 +706,47 @@ def tela_lancamentos():
             valor = txt_valor.get().strip()
             arquivo = combo_comp.get().strip()
 
-            if not dia or not valor or not arquivo or not conta_spread:
-                messagebox.showwarning("Erro", "Preencha todos os campos.")
+            if not dia or not valor or not conta_spread:
+                messagebox.showwarning("Erro", "Preencha todos os campos obrigatórios.")
                 return
 
-            comprovante = os.path.join(PASTA_COMPROVANTES, arquivo)
+            # ===========================
+            # RECUPERAR COMPROVANTE ORIGINAL (SE EXISTIR)
+            # ===========================
+            item = tree.selection()
+            compweb_old = ""
+            nome_old = ""
 
+            if item:
+                valores_old = tree.item(item[0], "values")
+                # (dia, conta, hist, compl, valor, datareg, nome_comp, compweb, datafull)
+                nome_old = valores_old[6]
+                compweb_old = valores_old[7]
+
+            # ===========================
+            # DEFINIR COMPROVANTE (NOVO OU ANTIGO)
+            # ===========================
+            if arquivo:
+                # se o que veio do combo já é link (Google Drive), não montar caminho local
+                if arquivo.startswith("http://") or arquivo.startswith("https://") or arquivo.startswith("open?id="):
+                    comprovante = arquivo
+                else:
+                    comprovante = os.path.join(PASTA_COMPROVANTES, arquivo)
+            else:
+                # não escolheu novo → mantém o que já estava no registro
+                comprovante = compweb_old
+
+            # se não houver nem antigo nem novo, avisa
+            if not comprovante:
+                messagebox.showwarning(
+                    "Comprovante",
+                    "Nenhum comprovante associado. Selecione um arquivo ou mantenha o link existente."
+                )
+                return
+
+            # ===========================
+            # FORMATAR VALOR
+            # ===========================
             valor = valor.replace(" ", "").replace(".", ",")
             if "," in valor:
                 partes = valor.split(",")
@@ -620,38 +768,101 @@ def tela_lancamentos():
 
             valor_sql = valor_decimal.replace(",", ".")
 
+            # ===========================
+            # COMPETÊNCIA
+            # ===========================
             comp = entry_comp.get().strip()
             mes = int(comp[:2])
             ano = int(comp[2:])
             dia_int = int(dia)
+            anomes = f"{ano}{str(mes).zfill(2)}"
 
-            data_base = datetime(ano, mes, dia_int)
+            # ===========================
+            # ROTEIRO E CONTA CAPA
+            # ===========================
+            rot = combo_roteiro.get().strip()
+            if not rot:
+                messagebox.showerror("Erro", "Selecione um roteiro antes de gravar o lançamento.")
+                return
+
+            try:
+                rot_codigo = rot.split(" - ")[0]
+                conta_capa = sql_capa.buscar_conta(rot_codigo)
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao buscar conta do roteiro:\n{e}")
+                return
+
+            if not conta_capa:
+                messagebox.showerror(
+                    "Erro",
+                    f"O roteiro {rot_codigo} não possui conta associada.\n"
+                    f"Cadastre a conta na capa do roteiro."
+                )
+                return
+
+            # ===========================
+            # DIA DE CORTE (somente cartões)
+            # ===========================
+            CONTAS_CARTAO = {"50200", "50300", "50500"}
+
+            if str(conta_capa) in CONTAS_CARTAO:
+                dia_corte = sql_conta.buscar_dia_corte(conta_capa, anomes)
+
+                if dia_corte is None:
+                    messagebox.showerror(
+                        "Competência inválida",
+                        f"Não existe dia de corte cadastrado para a conta {conta_capa} no mês {anomes}."
+                    )
+                    return
+
+                # ajustar data
+                data_digitada = datetime(ano, mes, dia_int)
+                data_base = ajustar_data_lancamento(data_digitada, dia_corte)
+
+                if data_base != data_digitada:
+                    messagebox.showinfo(
+                        "Competência Ajustada",
+                        f"Lançamento pós-corte.\n"
+                        f"Data ajustada automaticamente para {data_base.strftime('%d/%m/%Y')}."
+                    )
+            else:
+                # contas normais → não ajusta competência
+                data_base = datetime(ano, mes, dia_int)
+
+
             dataregistro = datetime.now().strftime("%d/%m/%Y %H:%M")
 
-            rot = combo_roteiro.get().split(" - ")[0]
-            conta_capa = sql_capa.buscar_conta(rot)
-
-            titulolote = sql_capa.buscar_titulolote(rot)
+            # ===========================
+            # LOTE E SEQUENCIAL
+            # ===========================
+            titulolote = sql_capa.buscar_titulolote(rot_codigo)
             lote = f"{titulolote}{comp}"
-
             seq = sql_lanc.proximo_sequencial_lote(lote)
             quemweb = "Geraldo"
 
+            # ===========================
+            # AUTOCOMPLETE
+            # ===========================
             if compl:
                 AUTOCOMP.add(compl)
                 config.add_complemento(compl)
 
             ultimo_comprovante["nome"] = arquivo
 
-            item = tree.selection()
+            # ===========================
+            # EXCLUIR LINHA ANTERIOR (EDIÇÃO)
+            # ===========================
             if item:
-                dia_old, conta_old, hist_old, compl_old, valor_old, datareg_old, nome_old, comp_old, data_old = tree.item(item[0], "values")
+                dia_old, conta_old, hist_old, compl_old, valor_old, datareg_old, nome_old, comp_old, data_old = valores_old
                 if valor_old.strip() != "":
                     sql_lanc.excluir_lancamento_duplo(
                         data_old, conta_old, hist_old, compl_old,
                         valor_old.replace(",", "."), comp_old
                     )
 
+            # ===========================
+            # GRAVAR PARCELAS
+            # ===========================
             parcelas = int(combo_parc.get())
             valor_total = float(valor_sql)
             valor_parcela = round(valor_total / parcelas, 2)
@@ -661,14 +872,16 @@ def tela_lancamentos():
                 datalancto_parcela = data_parcela.strftime("%Y-%m-%d")
                 compl_parcela = f"{compl} - {i+1}/{parcelas}"
 
+                # débito
                 sql_lanc.inserir(
-                    datalancto_parcela, rot, conta_capa, valor_parcela, "D",
+                    datalancto_parcela, rot_codigo, conta_capa, valor_parcela, "D",
                     hist, compl_parcela, conta_spread, dataregistro,
                     lote, seq, quemweb, comprovante
                 )
 
+                # crédito
                 sql_lanc.inserir(
-                    datalancto_parcela, rot, conta_spread, valor_parcela, "C",
+                    datalancto_parcela, rot_codigo, conta_spread, valor_parcela, "C",
                     hist, compl_parcela, conta_capa, dataregistro,
                     lote, seq, quemweb, comprovante
                 )
@@ -683,7 +896,7 @@ def tela_lancamentos():
                         compl_parcela,
                         f"{valor_parcela:.2f}".replace(".", ","),
                         dataregistro,
-                        arquivo,
+                        arquivo if arquivo else nome_old,
                         comprovante,
                         datalancto_parcela
                     )
@@ -696,9 +909,24 @@ def tela_lancamentos():
             limpar_campos()
             messagebox.showinfo("OK", "Lançamento gravado.")
             calcular_saldos()
-            carregar()   # <<< recompor o spread imediatamente
+            carregar()
+
         except Exception as e:
             messagebox.showerror("Erro ao gravar", str(e))
+
+
+    def ajustar_data_lancamento(data_real, dia_corte):
+        """
+        Se o lançamento ocorrer no dia do corte ou depois,
+        grava como dia 28 do mês seguinte.
+        """
+        if data_real.day >= dia_corte:
+            # mês seguinte
+            data_comp = data_real + relativedelta(months=1)
+            return data_comp.replace(day=28)
+        else:
+            # mês atual
+            return data_real
 
     # ===========================
     # BOTÕES

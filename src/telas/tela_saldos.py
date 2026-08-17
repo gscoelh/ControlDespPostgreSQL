@@ -21,10 +21,13 @@ def buscar_saldo_inicial(conta, data_ini):
         SELECT saldo_atu
         FROM saldos_diarios
         WHERE conta = %s
-          AND data < %s
-        ORDER BY data DESC
+          AND data = (
+                SELECT MAX(data)
+                FROM saldos_diarios
+                WHERE conta = %s AND data < %s
+          )
         LIMIT 1
-    """, (str(conta), data_ini))
+    """, (str(conta), str(conta), data_ini))
     row = cur.fetchone()
     conn.close()
     return row[0] if row else 0.0
@@ -55,8 +58,7 @@ def tela_saldos_mensais():
     win.title("Demonstração de Saldos Mensais")
     win.geometry("1400x700")
 
-    contas = sql_cadconta.listar()  # (codcta, descrcta, codagr, ...)
-    print("CONTAS:", contas)
+    contas = sql_cadconta.listar()
 
     frame_top = tk.Frame(win)
     frame_top.pack(pady=10, fill="x")
@@ -74,30 +76,40 @@ def tela_saldos_mensais():
 
     tk.Button(frame_top, text="Sair", command=win.destroy).grid(row=0, column=5, padx=10)
 
+    btn_limpar = tk.Button(frame_top, text="Limpar seleção")
+    btn_limpar.grid(row=0, column=6, padx=10)
+
     frame_main = tk.Frame(win)
     frame_main.pack(fill="both", expand=True)
 
     # ============================================================
-    # TREEVIEW DE CONTAS (SELEÇÃO MÚLTIPLA)
+    # TREEVIEW DE CONTAS COM SCROLL VERTICAL
     # ============================================================
     frame_contas = tk.Frame(frame_main)
     frame_contas.pack(side="left", fill="y", padx=10, pady=10)
 
     tk.Label(frame_contas, text="Contas (selecione várias)").pack(anchor="w")
 
+    scroll_contas_y = tk.Scrollbar(frame_contas, orient="vertical")
+
     tree_contas = ttk.Treeview(
         frame_contas,
         columns=("conta", "descr"),
         show="headings",
         height=25,
-        selectmode="extended"
+        selectmode="extended",
+        yscrollcommand=scroll_contas_y.set
     )
+
+    scroll_contas_y.config(command=tree_contas.yview)
+    scroll_contas_y.pack(side="right", fill="y")
+
+    tree_contas.pack(side="left", fill="y", expand=True)
 
     tree_contas.heading("conta", text="Conta")
     tree_contas.heading("descr", text="Descrição")
-    tree_contas.column("conta", width=100, anchor="w")
-    tree_contas.column("descr", width=250, anchor="w")
-    tree_contas.pack(fill="y", expand=False)
+    tree_contas.column("conta", width=100, anchor="w", stretch=False)
+    tree_contas.column("descr", width=250, anchor="w", stretch=False)
 
     tree_contas.tag_configure("selecionada", background="#cce5ff")
 
@@ -112,8 +124,15 @@ def tela_saldos_mensais():
 
     tree_contas.bind("<<TreeviewSelect>>", marcar_selecao)
 
+    def limpar_selecao():
+        for item in tree_contas.get_children():
+            tree_contas.selection_remove(item)
+            tree_contas.item(item, tags=())
+
+    btn_limpar.config(command=limpar_selecao)
+
     # ============================================================
-    # TREEVIEW DE SALDOS (SPREAD MAIOR)
+    # TREEVIEW DE SALDOS COM SCROLL HORIZONTAL E VERTICAL
     # ============================================================
     frame_spread = tk.Frame(frame_main)
     frame_spread.pack(side="right", fill="both", expand=True, padx=10, pady=10)
@@ -134,7 +153,7 @@ def tela_saldos_mensais():
 
     scroll_y.pack(side="right", fill="y")
     scroll_x.pack(side="bottom", fill="x")
-    tree_saldos.pack(fill="both", expand=True)
+    tree_saldos.pack(side="left", fill="both", expand=True)
 
     tree_saldos.tag_configure("zero", foreground="#999999")
     tree_saldos.tag_configure("total", background="#e0e0e0", foreground="blue")
@@ -165,10 +184,10 @@ def tela_saldos_mensais():
 
         for c in cols:
             tree_saldos.heading(c, text=c)
-            tree_saldos.column(c, width=120, anchor="e")
+            tree_saldos.column(c, width=120, anchor="e", stretch=False)
 
-        tree_saldos.column("conta", width=100, anchor="w")
-        tree_saldos.column("descrcta", width=250, anchor="w")
+        tree_saldos.column("conta", width=100, anchor="w", stretch=False)
+        tree_saldos.column("descrcta", width=250, anchor="w", stretch=False)
 
         for item in tree_saldos.get_children():
             tree_saldos.delete(item)
@@ -208,18 +227,18 @@ def tela_saldos_mensais():
                 except:
                     pass
 
-            linha_total = ["TOTAL", ""]
+        linha_total = ["TOTAL", ""]
 
-            # saldo inicial formatado
-            linha_total.append(f"{totais['saldo_inicial']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        linha_total.append(f"{totais['saldo_inicial']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
-            for m, a in meses:
-                chave = f"{m:02d}/{a}"
-                valor = totais[chave]
-                linha_total.append(f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        for m, a in meses:
+            chave = f"{m:02d}/{a}"
+            valor = totais[chave]
+            linha_total.append(f"{valor:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
 
-            # saldo final formatado
-            linha_total.append(f"{totais['saldo_final']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+        linha_total.append(f"{totais['saldo_final']:,.2f}".replace(",", "X").replace(".", ",").replace("X", "."))
+
+        tree_saldos.insert("", tk.END, values=linha_total, tags=("total",))
 
     # ============================================================
     # BOTÃO DEMONSTRAR
@@ -237,7 +256,6 @@ def tela_saldos_mensais():
 
         selecionadas = tree_contas.selection()
 
-        # ✔ Se nada selecionado → usar todas as contas
         if not selecionadas:
             lista = [(r[0], r[1]) for r in contas]
         else:
@@ -248,16 +266,5 @@ def tela_saldos_mensais():
                 lista.append((conta, descr))
 
         atualizar_spread(lista, data_ini, data_fim)
-
-    btn_limpar = tk.Button(frame_top, text="Limpar seleção")
-    btn_limpar.grid(row=0, column=6, padx=10)
-
-    def limpar_selecao():
-        for item in tree_contas.get_children():
-            tree_contas.selection_remove(item)
-            tree_contas.item(item, tags=())
-
-    btn_limpar.config(command=limpar_selecao)
-
 
     btn_demo.config(command=demonstrar)

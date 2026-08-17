@@ -50,27 +50,54 @@ def cancelar_processamento(janela):
 
 
 def recompor_saldos():
+    """
+    Nova rotina de recomposição de saldos.
+    Usa o MÊS DO LOTE para cartões e a DATA REAL para contas normais.
+    """
+
     global cancelar_flag
     cancelar_flag = False
 
+    # 1) Limpa tudo e recria saldos iniciais
     sql_saldos.apagar_todos()
     gerar_saldos_iniciais()
 
+    # 2) Carrega lançamentos
     lancs = sql_lancamentos.listar_todos_ordenados()
-    saldos = {}
+
+    # 3) Carrega dados auxiliares
+    contas = {c[0]: c[1] for c in sql_cadconta.listar()}  # conta → descr
+    cortes = carregar_datas_de_corte()  # conta → dia_corte
+
+    saldos = {}  # saldo atual por conta
+    agrupado = {}
 
     prog, barra = janela_progresso()
     total = len(lancs)
 
-    agrupado = {}
-
+    # ============================================================
+    # 4) AGRUPAR LANÇAMENTOS POR CONTA + DATA DE COMPETÊNCIA
+    # ============================================================
     for lan in lancs:
         conta = lan["conta"]
-        data = lan["data"]
+        data_real = lan["data"]
         valor = lan["valor"] or 0
         tipo = lan["tipo"]
 
-        chave = (conta, data)
+        # ------------------------------------------------------------
+        # DEFINIR DATA DE COMPETÊNCIA
+        # ------------------------------------------------------------
+        anomes_real = data_real.strftime("%Y%m")
+
+        dia_corte = cortes.get((conta, anomes_real))
+
+        if dia_corte is None:
+            # fallback: usa dia do mês real
+            data_comp = data_real.replace(day=1)
+        else:
+            data_comp = calcular_competencia_cartao(data_real, dia_corte)
+ 
+        chave = (conta, data_comp)
 
         if chave not in agrupado:
             agrupado[chave] = {"debito": 0, "credito": 0}
@@ -80,14 +107,18 @@ def recompor_saldos():
         else:
             agrupado[chave]["credito"] += valor
 
+    # Ordenar por conta + data_competência
     agrupado_ordenado = sorted(agrupado.items(), key=lambda x: (x[0][0], x[0][1]))
 
-    for i, ((conta, data), valores) in enumerate(agrupado_ordenado):
+    # ============================================================
+    # 5) GRAVAR SALDOS DIÁRIOS
+    # ============================================================
+    for i, ((conta, data_comp), valores) in enumerate(agrupado_ordenado):
         if cancelar_flag:
             messagebox.showwarning("Cancelado", "Processamento interrompido pelo usuário.")
             break
 
-        descrcta = sql_cadconta.buscar_descr(conta)
+        descrcta = contas.get(conta, "")
         saldo_ant = saldos.get(conta, sql_saldos.buscar_primeiro_saldo(conta))
 
         debito = valores["debito"]
@@ -98,7 +129,7 @@ def recompor_saldos():
         sql_saldos.inserir(
             conta=conta,
             descrcta=descrcta,
-            data=data,
+            data=data_comp,
             saldo_ant=saldo_ant,
             debito=debito,
             credito=credito,
@@ -109,7 +140,27 @@ def recompor_saldos():
         prog.update()
 
     prog.destroy()
-    messagebox.showinfo("OK", "Reprocessamento concluído.")
+    messagebox.showinfo("OK", "Reprocessamento concluído com competência corrigida.")
+def carregar_datas_de_corte():
+    conn = sql_saldos.get_connection()
+    cur = conn.cursor()
+    cur.execute("SELECT conta, datacorte FROM cartoes_corte")
+    rows = cur.fetchall()
+    conn.close()
+    return {conta: dia for conta, dia in rows}
+from datetime import datetime
+from dateutil.relativedelta import relativedelta
+
+def calcular_competencia_cartao(data_real, dia_corte):
+    dia = data_real.day
+
+    if dia > dia_corte:
+        # pós-corte → mês seguinte
+        return (data_real + relativedelta(months=1)).replace(day=1)
+    else:
+        # pré-corte → mês atual
+        return data_real.replace(day=1)
+
 def limpar_base():
     if messagebox.askyesno("Confirmar", "Deseja realmente limpar todos os saldos?"):
         sql_saldos.apagar_todos()
