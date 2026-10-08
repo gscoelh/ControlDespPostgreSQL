@@ -145,22 +145,43 @@ def buscar_dia_corte(conta, anomes):
         conn = get_connection()
         cur = conn.cursor()
 
+        conta_str = str(conta).strip()      # <-- STRING
+        anomes_str = str(anomes).strip()    # <-- STRING
+
+        print("DEBUG buscar_dia_corte -> conta:", conta_str, "anomes:", anomes_str)
+
         cur.execute("""
             SELECT datacorte
             FROM cartoes_corte
             WHERE conta = %s AND anomes = %s
             LIMIT 1
-        """, (conta, anomes))
+        """, (conta_str, anomes_str))       # <-- STRING, STRING
 
         row = cur.fetchone()
         conn.close()
 
         if row:
-            return row[0]  # dia de corte
+            print("DEBUG buscar_dia_corte -> encontrado datacorte:", row[0])
+            return row[0]
         else:
+            print("DEBUG buscar_dia_corte -> nenhum registro encontrado")
             return None
 
     except Exception as e:
         print("Erro buscar_dia_corte:", e)
         return None
 
+def buscar_natureza(cod_conta):
+    conn = get_connection()
+    cur = conn.cursor()
+
+    cur.execute("""
+        SELECT NATUREZACTA
+        FROM CADCONTA
+        WHERE CODCTA = %s
+    """, (cod_conta,))
+
+    row = cur.fetchone()
+    conn.close()
+
+    return row[0] if row else None

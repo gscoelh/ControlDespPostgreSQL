@@ -22,15 +22,15 @@ from dateutil.relativedelta import relativedelta
 
 PASTA_COMPROVANTES = config.get_pasta_comprovantes()
 AUTOCOMP = set(config.get_complementos())
+
+
 def verificar_competencia_cartao(conta, anomes):
     """
     Verifica se existe dia de corte cadastrado para a conta no mês AAAAMM.
     Só aplica para contas de cartão: 50200, 50300, 50500.
     """
-    # contas que usam dia de corte
     CONTAS_CARTAO = {"50200", "50300", "50500"}
 
-    # se não for cartão → sempre retorna True (não exige dia de corte)
     if str(conta) not in CONTAS_CARTAO:
         return True
 
@@ -53,6 +53,7 @@ def verificar_competencia_cartao(conta, anomes):
         messagebox.showerror("Erro", f"Erro ao verificar competência:\n{e}")
         return False
 
+
 def tela_lancamentos():
 
     janela = tk.Toplevel()
@@ -61,6 +62,12 @@ def tela_lancamentos():
     janela.grab_set()
 
     ultimo_comprovante = {"nome": ""}
+    lista_comprovantes = None
+
+
+    conta_capa = None
+    janela.selected_original = None  # para edição/exclusão
+    ultima_ordem = {"coluna": None, "reverse": False}
 
     # ===========================
     # CABEÇALHO
@@ -83,6 +90,17 @@ def tela_lancamentos():
     btn_carregar.pack(side="left", padx=10)
 
     # ===========================
+    # INFORMAÇÃO DA CONTA DO ROTEIRO
+    # ===========================
+    label_conta_info = tk.Label(
+        frame_top,
+        text="Conta do Roteiro: ---",
+        font=("Arial", 10, "bold"),
+        fg="blue"
+    )
+    label_conta_info.pack(side="left", padx=20)
+
+    # ===========================
     # SALDO INICIAL
     # ===========================
     frame_saldo_inicial = tk.Frame(janela)
@@ -94,38 +112,6 @@ def tela_lancamentos():
     entry_saldo_inicial.insert(0, "0,00")
 
     # ===========================
-    # VALIDAR COMPETÊNCIA
-    # ===========================
-    def validar_competencia(event):
-        comp = entry_comp.get().strip()
-
-        if len(comp) > 6:
-            entry_comp.delete(6, tk.END)
-            return
-
-        if not comp.isdigit():
-            entry_comp.delete(0, tk.END)
-            return
-
-        if len(comp) == 6:
-            mes = int(comp[:2])
-            ano = int(comp[2:])
-
-            if mes < 1 or mes > 12:
-                messagebox.showwarning("Competência inválida", "Mês deve estar entre 01 e 12.")
-                entry_comp.delete(0, tk.END)
-                return
-
-            if ano < 2000 or ano > 2099:
-                messagebox.showwarning("Competência inválida", "Ano deve estar entre 2000 e 2099.")
-                entry_comp.delete(0, tk.END)
-                return
-
-            carregar()
-
-    entry_comp.bind("<KeyRelease>", validar_competencia)
-
-    # ===========================
     # SPREAD
     # ===========================
     frame_tree = tk.Frame(janela)
@@ -133,7 +119,7 @@ def tela_lancamentos():
 
     colunas = (
         "DIA", "CONTA", "HISTORICO", "COMPLHISTORICO", "VALOR",
-        "DATAREGISTRO", "COMPROVANTE", "COMPPATH", "DATAFULL"
+        "NATUREZA", "DATAREGISTRO", "COMPROVANTE", "COMPPATH", "DATAFULL"
     )
 
     tree = ttk.Treeview(frame_tree, columns=colunas, show="headings")
@@ -146,6 +132,10 @@ def tela_lancamentos():
     tree.column("HISTORICO", width=250)
     tree.column("COMPLHISTORICO", width=300)
     tree.column("VALOR", width=120, anchor="e")
+
+    tree.column("NATUREZA", width=80, anchor="center")
+    tree.heading("NATUREZA", text="NAT")
+
     tree.column("DATAREGISTRO", width=150)
     tree.column("COMPROVANTE", width=200)
 
@@ -178,8 +168,9 @@ def tela_lancamentos():
     tk.Label(frame_totais, text="Saldo Final").grid(row=0, column=4, padx=10)
     entry_saldo_final = tk.Entry(frame_totais, width=15, state="readonly")
     entry_saldo_final.grid(row=0, column=5)
+
     # ===========================
-    # VERIFICAR COMPETÊNCIA AO ENTRAR NA TELA
+    # VERIFICAR COMPETÊNCIA AO ENTRAR
     # ===========================
     def verificar_competencia_inicial():
         comp = entry_comp.get().strip()
@@ -188,24 +179,21 @@ def tela_lancamentos():
 
         mes = comp[:2]
         ano = comp[2:]
-        anomes = ano + mes  # formato AAAAMM
+        anomes = ano + mes
 
-        # conta do roteiro selecionado
         if not combo_roteiro.get():
             return
 
         rot = combo_roteiro.get().split(" - ")[0]
-        conta_capa = sql_capa.buscar_conta(rot)
+        conta_local = sql_capa.buscar_conta(rot)
 
-        if not verificar_competencia_cartao(conta_capa, anomes):
+        if not verificar_competencia_cartao(conta_local, anomes):
             messagebox.showwarning(
                 "Competência não configurada",
-                f"Não existe dia de corte cadastrado para a conta {conta_capa} no mês {anomes}.\n"
+                f"Não existe dia de corte cadastrado para a conta {conta_local} no mês {anomes}.\n"
                 f"Cadastre o dia de corte antes de lançar."
             )
-            return
 
-    # chama automaticamente ao abrir
     janela.after(300, verificar_competencia_inicial)
 
     # ===========================
@@ -238,7 +226,7 @@ def tela_lancamentos():
 
         for item in tree.get_children():
             valores = tree.item(item, "values")
-            datareg = valores[5]
+            datareg = valores[6]
 
             try:
                 dt_reg = datetime.strptime(datareg, "%d/%m/%Y %H:%M")
@@ -276,60 +264,60 @@ def tela_lancamentos():
 
     tree.heading("DATAREGISTRO", text="DATAREGISTRO", command=ordenar_dataregistro)
 
-    # ===========================
-    # CÁLCULO DE SALDOS (POR COMPETÊNCIA)
-    # ===========================
+# ===========================
+# CÁLCULO DE SALDOS
+# ===========================
     def calcular_saldos():
         try:
             saldo_inicial = float(entry_saldo_inicial.get().replace(".", "").replace(",", "."))
         except:
             saldo_inicial = 0.0
 
-        total_c = 0.0
-        total_d = 0.0
+        saldo_final = saldo_inicial
 
-        comp = entry_comp.get().strip()
-        if len(comp) != 6 or not combo_roteiro.get():
-            entry_total_c.config(state="normal")
-            entry_total_d.config(state="normal")
-            entry_saldo_final.config(state="normal")
-
-            entry_total_c.delete(0, tk.END)
-            entry_total_d.delete(0, tk.END)
-            entry_saldo_final.delete(0, tk.END)
-
-            entry_total_c.insert(0, "0,00")
-            entry_total_d.insert(0, "0,00")
-            entry_saldo_final.insert(0, f"{saldo_inicial:.2f}".replace(".", ","))
-
-            entry_total_c.config(state="readonly")
-            entry_total_d.config(state="readonly")
-            entry_saldo_final.config(state="readonly")
-            return
-
-        mes = int(comp[:2])
-        ano = int(comp[2:])
+        # natureza da conta capa (vem do cadastro)
         rot = combo_roteiro.get().split(" - ")[0]
+        conta_capa_local = sql_capa.buscar_conta(rot)
+        natureza_capa = sql_conta.buscar_natureza(conta_capa_local)  # "D" ou "C"
 
-        try:
-            existentes = sql_lanc.listar_por_roteiro_competencia(rot, mes, ano)
-        except Exception:
-            existentes = []
+        for item in tree.get_children():
+            valores = tree.item(item, "values")
 
-        for lan in existentes:
+            valor_str = valores[4]
+            sinal_spread = valores[5]  # "D" ou "C"
+
+            if not valor_str:
+                continue
+
             try:
-                valor = float(lan[4])
+                valor_float = float(valor_str.replace(".", "").replace(",", "."))
             except:
                 continue
 
-            natureza = lan[5] if len(lan) > 5 else "D"
+            # regra contábil final
+            if natureza_capa == "D":
+                if sinal_spread == "C":
+                    saldo_final -= valor_float
+                else:
+                    saldo_final += valor_float
+            else:  # natureza capa = C
+                if sinal_spread == "D":
+                    saldo_final -= valor_float
+                else:
+                    saldo_final += valor_float
 
-            if natureza == "C":
-                total_c += valor
-            elif natureza == "D":
-                total_d += valor
+        # totais
+        total_c = sum(
+            float(tree.item(i, "values")[4].replace(".", "").replace(",", "."))
+            for i in tree.get_children()
+            if tree.item(i, "values")[5] == "C" and tree.item(i, "values")[4]
+        )
 
-        saldo_final = saldo_inicial + total_c - total_d
+        total_d = sum(
+            float(tree.item(i, "values")[4].replace(".", "").replace(",", "."))
+            for i in tree.get_children()
+            if tree.item(i, "values")[5] == "D" and tree.item(i, "values")[4]
+        )
 
         entry_total_c.config(state="normal")
         entry_total_d.config(state="normal")
@@ -346,8 +334,6 @@ def tela_lancamentos():
         entry_total_c.config(state="readonly")
         entry_total_d.config(state="readonly")
         entry_saldo_final.config(state="readonly")
-
-    entry_saldo_inicial.bind("<KeyRelease>", lambda e: calcular_saldos())
 
     # ===========================
     # CAMPOS DE EDIÇÃO
@@ -415,6 +401,10 @@ def tela_lancamentos():
 
         combo_comp.set("")
         combo_comp.config(state="disabled")
+        combo_parc.set("1")
+       # combo_parc.config(state="disabled")
+ 
+        janela.selected_original = None
 
     limpar_campos()
 
@@ -426,48 +416,100 @@ def tela_lancamentos():
         if not valor:
             return
 
-        valor = valor.replace(".", ",")
-        if "," in valor:
-            partes = valor.split(",")
-            if len(partes) == 2 and partes[0].isdigit() and partes[1].isdigit():
-                centavos = partes[1].ljust(2, "0")[:2]
-                txt_valor.delete(0, tk.END)
-                txt_valor.insert(0, f"{partes[0]},{centavos}")
-                return
+        # detectar sinal digitado
+        tem_sinal_negativo = valor.startswith("-")
 
-        if valor.isdigit():
-            if len(valor) == 1:
-                txt_valor.delete(0, tk.END)
-                txt_valor.insert(0, f"0,0{valor}")
-            elif len(valor) == 2:
-                txt_valor.delete(0, tk.END)
-                txt_valor.insert(0, f"0,{valor}")
-            else:
-                txt_valor.delete(0, tk.END)
-                txt_valor.insert(0, valor[:-2] + "," + valor[-2:])
+        # remover sinal para formatar
+        valor_sem_sinal = valor.replace("-", "").replace(".", "").replace(",", "")
 
-    txt_valor.bind("<FocusOut>", formatar_valor)
+        if not valor_sem_sinal.isdigit():
+            return
+
+        # aplicar formatação: duas casas decimais
+        if len(valor_sem_sinal) == 1:
+            valor_formatado = f"0,0{valor_sem_sinal}"
+        elif len(valor_sem_sinal) == 2:
+            valor_formatado = f"0,{valor_sem_sinal}"
+        else:
+            valor_formatado = valor_sem_sinal[:-2] + "," + valor_sem_sinal[-2:]
+
+        # recolocar sinal se necessário
+        if tem_sinal_negativo:
+            valor_formatado = "-" + valor_formatado
+
+        txt_valor.delete(0, tk.END)
+        txt_valor.insert(0, valor_formatado)
+
+        # ===========================
+        # ALERTA DE CONSISTÊNCIA
+        # ===========================
+
+        conta_spread = txt_conta.get().strip()
+        if not conta_spread:
+            return
+
+        natureza_spread = sql_conta.buscar_natureza(conta_spread)  # "D" ou "C"
+
+        if natureza_spread == "D" and tem_sinal_negativo:
+            messagebox.showwarning(
+                "Atenção",
+                "A conta é de natureza DEVEDORA (D), mas o valor digitado está NEGATIVO.\n"
+                "Verifique se o sinal está correto."
+            )
+
+        if natureza_spread == "C" and not tem_sinal_negativo:
+            messagebox.showwarning(
+                "Atenção",
+                "A conta é de natureza CREDORA (C), mas o valor digitado está POSITIVO.\n"
+                "Verifique se o sinal está correto."
+            )
+
+
+    # ===========================
+    #Adicionar linhas no spread
+    # ===========================
+    def adicionar_linha_spread(dia, conta, hist, compl, valor, natureza, datareg, nome_comp, compweb, datafull):
+        tree.insert(
+            "",
+            tk.END,
+            values=(dia, conta, hist, compl, valor, natureza, datareg, nome_comp, compweb, datafull)
+        )
 
     # ===========================
     # CARREGAR COMPROVANTES
     # ===========================
     def carregar_comprovantes():
-        try:
-            arquivos = os.listdir(PASTA_COMPROVANTES)
-            arquivos = [
-                arq for arq in arquivos
-                if os.path.isfile(os.path.join(PASTA_COMPROVANTES, arq))
-            ]
-            arquivos.sort()
-            combo_comp["values"] = arquivos
-        except Exception as e:
-            messagebox.showerror("Erro", f"Não foi possível carregar comprovantes:\n{e}")
+        nonlocal lista_comprovantes
+
+        arquivos = os.listdir(PASTA_COMPROVANTES)
+        arquivos = [
+            arq for arq in arquivos
+            if os.path.isfile(os.path.join(PASTA_COMPROVANTES, arq))
+        ]
+
+        lista = []
+        for nome in arquivos:
+            caminho = os.path.join(PASTA_COMPROVANTES, nome)
+            try:
+                data_mod = os.path.getmtime(caminho)  # timestamp da data/hora do arquivo
+            except:
+                data_mod = 0  # fallback seguro
+            lista.append((data_mod, nome))
+
+        # ordenar do mais novo para o mais antigo
+        lista.sort(reverse=True)
+
+        # extrair só os nomes para o combobox
+        lista_comprovantes = [nome for (_, nome) in lista]
+        combo_comp["values"] = lista_comprovantes
+
 
     # ===========================
     # CARREGAR LANÇAMENTOS
     # ===========================
     def carregar():
-    # verificar competência antes de carregar
+        nonlocal conta_capa
+
         comp = entry_comp.get().strip()
         if len(comp) == 6:
             mes = comp[:2]
@@ -477,19 +519,22 @@ def tela_lancamentos():
             rot = combo_roteiro.get().split(" - ")[0]
             conta_capa = sql_capa.buscar_conta(rot)
 
-            if not verificar_competencia_cartao(conta_capa, anomes):
-                messagebox.showwarning(
-                    "Competência não configurada",
-                    f"Não existe dia de corte cadastrado para a conta {conta_capa} no mês {anomes}."
+            dados_conta = next((c for c in sql_conta.listar() if c[0] == conta_capa), None)
+
+            if dados_conta:
+                nome_conta = dados_conta[1]
+                natureza_conta = dados_conta[5]
+                label_conta_info.config(
+                    text=f"Conta do Roteiro: {conta_capa} – {nome_conta} – Natureza: {natureza_conta}"
                 )
-                return
-    
+            else:
+                label_conta_info.config(text=f"Conta do Roteiro: {conta_capa} – (não encontrada)")
+
         carregar_comprovantes()
 
         for item in tree.get_children():
             tree.delete(item)
 
-        comp = entry_comp.get().strip()
         if len(comp) != 6:
             calcular_saldos()
             return
@@ -505,7 +550,13 @@ def tela_lancamentos():
             if r[0] == rot:
                 conta_spread = r[2] if r[1] == "D" else r[3]
                 nome = next((c[1] for c in sql_conta.listar() if c[0] == conta_spread), "")
-                tree.insert("", tk.END, values=("", conta_spread, nome, "", "", "", "", "", ""))
+                natureza_spread = sql_conta.buscar_natureza(conta_spread)
+
+                tree.insert(
+                    "",
+                    tk.END,
+                    values=("", conta_spread, nome, "", "", natureza_spread, "", "", "", "")
+                )
 
         existentes = sql_lanc.listar_por_roteiro_competencia(rot, mes, ano)
 
@@ -520,14 +571,21 @@ def tela_lancamentos():
             datareg = lan[8].strftime("%d/%m/%Y %H:%M")
             nome_arquivo = os.path.basename(compweb) if compweb else ""
 
+            natureza = sql_conta.buscar_natureza(conta)
+
+            natureza = lan[5]  # usa o sinal do lançamento, não da conta
+
             if conta != conta_capa:
                 tree.insert(
                     "",
                     tk.END,
-                    values=(dia, conta, hist, compl, valor, datareg, nome_arquivo, compweb, datafull)
+                    values=(dia, conta, hist, compl, valor, natureza, datareg, nome_arquivo, compweb, datafull)
                 )
-
         calcular_saldos()
+        limpar_campos()
+        if ultima_ordem["coluna"]:
+            treeview_sort_column(tree, ultima_ordem["coluna"], ultima_ordem["reverse"])
+
 
     btn_carregar.config(command=carregar)
 
@@ -544,7 +602,10 @@ def tela_lancamentos():
 
         for index, (val, k) in enumerate(dados):
             tv.move(k, '', index)
-
+    # SALVAR A ÚLTIMA ORDENAÇÃO
+        ultima_ordem["coluna"] = col
+        ultima_ordem["reverse"] = reverse
+        
         tv.heading(col, command=lambda: treeview_sort_column(tv, col, not reverse))
 
     tree.heading("DIA", text="DIA", command=lambda: treeview_sort_column(tree, "DIA", False))
@@ -555,8 +616,6 @@ def tela_lancamentos():
     tree.heading("DATAREGISTRO", text="DATAREGISTRO", command=ordenar_dataregistro)
     tree.heading("COMPROVANTE", text="COMPROVANTE", command=lambda: treeview_sort_column(tree, "COMPROVANTE", False))
  
-
-
     # ===========================
     # SELECIONAR LINHA
     # ===========================
@@ -567,16 +626,41 @@ def tela_lancamentos():
 
         valores = tree.item(item[0], "values")
 
-        dia, conta, hist, compl, valor, datareg, nome_comp, compweb, datafull = valores
+        # linhas do spread têm 10 colunas, mas datafull é vazio
+        dia        = valores[0]
+        conta      = valores[1]
+        hist       = valores[2]
+        compl      = valores[3]
+        valor      = valores[4]
+        natureza   = valores[5]
+        datareg    = valores[6]
+        nome_comp  = valores[7]
+        compweb    = valores[8]
+        datafull   = valores[9] if len(valores) == 10 else ""
 
+        # só guarda original se for lançamento gravado
+        if datafull and compweb and dia:
+            janela.selected_original = {
+                "datafull": datafull,
+                "conta_spread": conta,
+                "hist": hist,
+                "compl": compl,
+                "valor": valor.replace(",", "."),
+                "compweb": compweb
+            }
+        else:
+            janela.selected_original = None
+
+
+        # habilitar campos
         for campo in (txt_dia, txt_compl, txt_valor, txt_datareg):
             campo.config(state="normal")
 
         combo_comp.config(state="normal")
-
         txt_conta.config(state="normal")
         txt_hist.config(state="normal")
 
+        # preencher campos
         txt_dia.delete(0, tk.END)
         txt_conta.delete(0, tk.END)
         txt_hist.delete(0, tk.END)
@@ -591,10 +675,7 @@ def tela_lancamentos():
         txt_valor.insert(0, valor)
         txt_datareg.insert(0, datareg)
 
-        if ultimo_comprovante["nome"]:
-            combo_comp.set(ultimo_comprovante["nome"])
-        else:
-            combo_comp.set(nome_comp)
+        combo_comp.set(nome_comp)
 
         txt_conta.config(state="disabled")
         txt_hist.config(state="disabled")
@@ -602,18 +683,17 @@ def tela_lancamentos():
 
         txt_dia.focus_set()
 
+
     tree.bind("<<TreeviewSelect>>", selecionar)
 
     # ===========================
-    # ABRIR COMPROVANTE + MIGRAÇÃO AUTOMÁTICA
+    # ABRIR COMPROVANTE
     # ===========================
     def abrir_comprovante(event):
-        # identificar linha e coluna clicada
         item = tree.identify_row(event.y)
         coluna = tree.identify_column(event.x)
 
-        # coluna "#7" = COMPROVANTE
-        if coluna != "#7":
+        if coluna != "#8":
             return
 
         if not item:
@@ -621,52 +701,39 @@ def tela_lancamentos():
             return
 
         valores = tree.item(item, "values")
-        caminho = valores[7]
+        caminho = valores[8]
 
         if not caminho:
             messagebox.showwarning("Comprovante", "Nenhum comprovante associado.")
             return
 
         caminho = caminho.strip()
-        print("Caminho recebido:", caminho)
 
-        # GOOGLE DRIVE (formato antigo)
         if caminho.startswith("open?id="):
             drive_id = caminho.replace("open?id=", "")
             url = f"https://drive.google.com/uc?id={drive_id}"
-            print("Abrindo Drive:", url)
             webbrowser.open(url)
             return
 
-        # GOOGLE DRIVE (completo)
         if "drive.google.com" in caminho:
-            print("Abrindo Drive completo:", caminho)
             webbrowser.open(caminho)
             return
 
-        # ONEDRIVE
         if "onedrive.live.com" in caminho or "1drv.ms" in caminho:
-            print("Abrindo OneDrive:", caminho)
             webbrowser.open(caminho)
             return
 
-        # HTTP/HTTPS genérico
         if caminho.startswith("http://") or caminho.startswith("https://"):
-            print("Abrindo link HTTP:", caminho)
             webbrowser.open(caminho)
             return
 
-        # ARQUIVO LOCAL
         if os.path.exists(caminho):
-            print("Abrindo arquivo local:", caminho)
             os.startfile(caminho)
             return
 
         messagebox.showerror("Erro", f"O caminho informado não existe:\n{caminho}")
-    # ===========================
-    # AGORA SIM — bind fora da função
-    # ===========================
-    tree.bind("<Double-1>", abrir_comprovante)   
+
+    tree.bind("<Double-1>", abrir_comprovante)
 
     # ===========================
     # EXCLUIR LANÇAMENTO
@@ -677,256 +744,376 @@ def tela_lancamentos():
             messagebox.showwarning("Excluir", "Selecione uma linha.")
             return
 
-        dia, conta, hist, compl, valor, datareg, nome_comp, compweb, datafull = tree.item(item[0], "values")
-
-        if not dia or not valor:
-            messagebox.showwarning("Excluir", "Linha vazia não pode ser excluída.")
+        if not janela.selected_original:
+            messagebox.showwarning("Excluir", "Nenhum lançamento gravado selecionado.")
             return
 
-        sql_lanc.excluir_lancamento_duplo(
-            datafull, conta, hist, compl, valor.replace(",", "."), compweb
-        )
-        tree.delete(item[0])
+        orig = janela.selected_original
 
-        limpar_campos()
-        calcular_saldos()
+        try:
+            sql_lanc.excluir_lancamento_duplo(
+                orig["datafull"],
+                orig["conta_spread"],
+                orig["hist"],
+                orig["compl"],
+                float(orig["valor"]),
+                orig["compweb"]
+            )
+
+            tree.delete(item[0])
+            limpar_campos()
+            calcular_saldos()
+
+            messagebox.showinfo("OK", "Lançamento excluído.")
+        except Exception as e:
+            messagebox.showerror("Erro", f"Erro ao excluir:\n{e}")
+    def ajustar_data_lancamento(data_real, dia_corte):
+        """
+        Ajusta a competência do lançamento conforme o dia de corte.
+        Regra:
+        - Se o dia do lançamento > dia_corte -> competência vai para mês seguinte.
+        - Caso contrário -> permanece no mesmo mês.
+        """
+        dia = data_real.day
+        mes = data_real.month
+        ano = data_real.year
+
+        if dia > dia_corte:
+            mes += 1
+            if mes > 12:
+                mes = 1
+                ano += 1
+
+        # aqui mantenho o mesmo dia; se quiser, pode ajustar para último dia do mês
+        return datetime(ano, mes, dia)
 
     # ===========================
     # GRAVAR LINHA (D/C COM PARCELAMENTO)
     # ===========================
+     # ===========================
+    # GRAVAR LINHA (D/C COM PARCELAMENTO)
+    # ===========================
     def gravar_linha():
         try:
-            # ===========================
-            # CAMPOS BÁSICOS
-            # ===========================
             dia = txt_dia.get().strip()
             conta_spread = txt_conta.get().strip()
             hist = txt_hist.get().strip()
             compl = txt_compl.get().strip()
-            valor = txt_valor.get().strip()
+            valor_digitado = txt_valor.get().strip()
             arquivo = combo_comp.get().strip()
 
-            if not dia or not valor or not conta_spread:
+            if not dia or not valor_digitado or not conta_spread:
                 messagebox.showwarning("Erro", "Preencha todos os campos obrigatórios.")
                 return
 
-            # ===========================
-            # RECUPERAR COMPROVANTE ORIGINAL (SE EXISTIR)
-            # ===========================
+            # detectar sinal digitado pelo usuário
+            tem_sinal_negativo = valor_digitado.startswith("-")
+
+            # valor sem sinal para gravar no banco
+            valor_sql = valor_digitado.replace(".", "").replace(",", ".")
+            valor_float_abs = abs(float(valor_sql))
+
+            # comprovante
             item = tree.selection()
             compweb_old = ""
-            nome_old = ""
-
             if item:
                 valores_old = tree.item(item[0], "values")
-                # (dia, conta, hist, compl, valor, datareg, nome_comp, compweb, datafull)
-                nome_old = valores_old[6]
-                compweb_old = valores_old[7]
+                if len(valores_old) >= 9:
+                    compweb_old = valores_old[8]
 
-            # ===========================
-            # DEFINIR COMPROVANTE (NOVO OU ANTIGO)
-            # ===========================
-            if arquivo:
-                # se o que veio do combo já é link (Google Drive), não montar caminho local
-                if arquivo.startswith("http://") or arquivo.startswith("https://") or arquivo.startswith("open?id="):
-                    comprovante = arquivo
-                else:
-                    comprovante = os.path.join(PASTA_COMPROVANTES, arquivo)
-            else:
-                # não escolheu novo → mantém o que já estava no registro
-                comprovante = compweb_old
+            comprovante = os.path.join(PASTA_COMPROVANTES, arquivo) if arquivo else compweb_old
 
-            # se não houver nem antigo nem novo, avisa
             if not comprovante:
-                messagebox.showwarning(
-                    "Comprovante",
-                    "Nenhum comprovante associado. Selecione um arquivo ou mantenha o link existente."
-                )
+                messagebox.showwarning("Comprovante", "Nenhum comprovante associado.")
                 return
 
-            # ===========================
-            # FORMATAR VALOR
-            # ===========================
-            valor = valor.replace(" ", "").replace(".", ",")
-            if "," in valor:
-                partes = valor.split(",")
-                if len(partes) != 2 or not partes[0].isdigit() or not partes[1].isdigit():
-                    messagebox.showwarning("Valor inválido", "Digite um valor válido, ex: 345,88")
-                    return
-                centavos = partes[1].ljust(2, "0")[:2]
-                valor_decimal = f"{partes[0]},{centavos}"
-            else:
-                if not valor.isdigit():
-                    messagebox.showwarning("Valor inválido", "Digite apenas números ou números com vírgula.")
-                    return
-                if len(valor) == 1:
-                    valor_decimal = f"0,0{valor}"
-                elif len(valor) == 2:
-                    valor_decimal = f"0,{valor}"
-                else:
-                    valor_decimal = valor[:-2] + "," + valor[-2:]
-
-            valor_sql = valor_decimal.replace(",", ".")
-
-            # ===========================
-            # COMPETÊNCIA
-            # ===========================
+            # competência digitada (MMAAAA)
             comp = entry_comp.get().strip()
             mes = int(comp[:2])
             ano = int(comp[2:])
             dia_int = int(dia)
+
+            data_real = datetime(ano, mes, dia_int)
+
+            # montar AAAAMM para buscar na tabela cartoes_corte
             anomes = f"{ano}{str(mes).zfill(2)}"
 
-            # ===========================
-            # ROTEIRO E CONTA CAPA
-            # ===========================
-            rot = combo_roteiro.get().strip()
-            if not rot:
-                messagebox.showerror("Erro", "Selecione um roteiro antes de gravar o lançamento.")
-                return
+            # buscar conta da capa (é ela que tem dia de corte)
+            rot = combo_roteiro.get().split(" - ")[0]
+            conta_capa_local = sql_capa.buscar_conta(rot)
 
-            try:
-                rot_codigo = rot.split(" - ")[0]
-                conta_capa = sql_capa.buscar_conta(rot_codigo)
-            except Exception as e:
-                messagebox.showerror("Erro", f"Erro ao buscar conta do roteiro:\n{e}")
-                return
+            # buscar dia de corte da conta da capa
+            dia_corte = sql_conta.buscar_dia_corte(str(conta_capa_local).strip(), str(anomes).strip())
 
-            if not conta_capa:
-                messagebox.showerror(
-                    "Erro",
-                    f"O roteiro {rot_codigo} não possui conta associada.\n"
-                    f"Cadastre a conta na capa do roteiro."
-                )
-                return
+            print("DEBUG -> conta_capa_local:", conta_capa_local)
+            print("DEBUG -> dia_corte:", dia_corte)
+            print("DEBUG gravar_linha -> conta_spread:", conta_spread, "anomes:", anomes, "dia_corte:", dia_corte)
+            print("DEBUG gravar_linha -> data_real:", data_real)
 
-            # ===========================
-            # DIA DE CORTE (somente cartões)
-            # ===========================
-            CONTAS_CARTAO = {"50200", "50300", "50500"}
+            # determinar mês original da competência digitada
+            mes_original = mes
+            ano_original = ano
 
-            if str(conta_capa) in CONTAS_CARTAO:
-                dia_corte = sql_conta.buscar_dia_corte(conta_capa, anomes)
+            # determinar mês atual do lançamento (data_real)
+            mes_lanc = data_real.month
+            ano_lanc = data_real.year
 
-                if dia_corte is None:
-                    messagebox.showerror(
-                        "Competência inválida",
-                        f"Não existe dia de corte cadastrado para a conta {conta_capa} no mês {anomes}."
+            # determinar mês ajustado (mês seguinte)
+            mes_ajustado = mes_original + 1
+            ano_ajustado = ano_original
+            if mes_ajustado > 12:
+                mes_ajustado = 1
+                ano_ajustado += 1
+
+            # CASO 1: lançamento está no mês original → aplicar regra normal com pergunta
+            if mes_lanc == mes_original and ano_lanc == ano_original:
+                if dia_corte and data_real.day > dia_corte:
+                    resposta = messagebox.askyesno(
+                        "Ajustar competência",
+                        f"O dia {data_real.day} está acima do dia de corte ({dia_corte}).\n"
+                        f"Deseja mover este lançamento para {mes_ajustado:02d}/{ano_ajustado}?"
                     )
-                    return
+                    if resposta:
+                        data_base = ajustar_data_lancamento(data_real, dia_corte)
+                    else:
+                        data_base = data_real
+                else:
+                    data_base = data_real
 
-                # ajustar data
-                data_digitada = datetime(ano, mes, dia_int)
-                data_base = ajustar_data_lancamento(data_digitada, dia_corte)
+            # CASO 2: lançamento já está no mês ajustado → NÃO ajustar automaticamente
+            elif mes_lanc == mes_ajustado and ano_lanc == ano_ajustado:
+                data_base = data_real
 
-                if data_base != data_digitada:
-                    messagebox.showinfo(
-                        "Competência Ajustada",
-                        f"Lançamento pós-corte.\n"
-                        f"Data ajustada automaticamente para {data_base.strftime('%d/%m/%Y')}."
-                    )
+            # CASO 3: qualquer outro mês → NÃO ajustar automaticamente
             else:
-                # contas normais → não ajusta competência
-                data_base = datetime(ano, mes, dia_int)
+                data_base = data_real
 
+            print("DEBUG gravar_linha -> data_base (ajustada):", data_base)
 
-            dataregistro = datetime.now().strftime("%d/%m/%Y %H:%M")
-
-            # ===========================
-            # LOTE E SEQUENCIAL
-            # ===========================
-            titulolote = sql_capa.buscar_titulolote(rot_codigo)
-            lote = f"{titulolote}{comp}"
-            seq = sql_lanc.proximo_sequencial_lote(lote)
-            quemweb = "Geraldo"
-
-            # ===========================
-            # AUTOCOMPLETE
-            # ===========================
-            if compl:
-                AUTOCOMP.add(compl)
-                config.add_complemento(compl)
-
-            ultimo_comprovante["nome"] = arquivo
-
-            # ===========================
-            # EXCLUIR LINHA ANTERIOR (EDIÇÃO)
-            # ===========================
-            if item:
-                dia_old, conta_old, hist_old, compl_old, valor_old, datareg_old, nome_old, comp_old, data_old = valores_old
-                if valor_old.strip() != "":
-                    sql_lanc.excluir_lancamento_duplo(
-                        data_old, conta_old, hist_old, compl_old,
-                        valor_old.replace(",", "."), comp_old
-                    )
+            # ============================================================
+            # 🔥 EXCLUIR LANÇAMENTO ORIGINAL (SE ESTIVER EDITANDO)
+            # ============================================================
+            if janela.selected_original:
+                orig = janela.selected_original
+                sql_lanc.excluir_lancamento_duplo(
+                    orig["datafull"],
+                    orig["conta_spread"],
+                    orig["hist"],
+                    orig["compl"],
+                    float(orig["valor"]),
+                    orig["compweb"]
+                )
+                print("DEBUG -> original excluído:", orig)
+            # remover linha antiga da tela
+            if item and janela.selected_original:
+                tree.delete(item[0])
 
             # ===========================
-            # GRAVAR PARCELAS
+            # DEFINIÇÃO DO SINAL FINAL
+            # ===========================
+            natureza_capa = sql_conta.buscar_natureza(conta_capa_local)
+
+            if not tem_sinal_negativo:
+                if natureza_capa == "D":
+                    sinal_spread = "C"
+                    sinal_capa = "D"
+                else:
+                    sinal_spread = "D"
+                    sinal_capa = "C"
+            else:
+                if natureza_capa == "D":
+                    sinal_spread = "D"
+                    sinal_capa = "C"
+                else:
+                    sinal_spread = "C"
+                    sinal_capa = "D"
+
+            # ===========================
+            # PARCELAMENTO
             # ===========================
             parcelas = int(combo_parc.get())
-            valor_total = float(valor_sql)
-            valor_parcela = round(valor_total / parcelas, 2)
 
-            for i in range(parcelas):
-                data_parcela = data_base + relativedelta(months=i)
-                datalancto_parcela = data_parcela.strftime("%Y-%m-%d")
-                compl_parcela = f"{compl} - {i+1}/{parcelas}"
+            if parcelas > 1:
+                valor_parcela = round(valor_float_abs / parcelas, 2)
 
-                # débito
-                sql_lanc.inserir(
-                    datalancto_parcela, rot_codigo, conta_capa, valor_parcela, "D",
-                    hist, compl_parcela, conta_spread, dataregistro,
-                    lote, seq, quemweb, comprovante
-                )
+                mes_parc = data_base.month
+                ano_parc = data_base.year
 
-                # crédito
-                sql_lanc.inserir(
-                    datalancto_parcela, rot_codigo, conta_spread, valor_parcela, "C",
-                    hist, compl_parcela, conta_capa, dataregistro,
-                    lote, seq, quemweb, comprovante
-                )
+                for i in range(parcelas):
 
-                tree.insert(
-                    "",
-                    tk.END,
-                    values=(
-                        str(data_parcela.day).zfill(2),
+                    # cada parcela usa a data_base como referência
+                    data_parcela = datetime(ano_parc, mes_parc, data_base.day)
+
+                    lote_parc = f"{rot}-{data_parcela.year}{str(data_parcela.month).zfill(2)}"
+                    seq_parc = sql_lanc.proximo_sequencial_lote(lote_parc)
+                    dataregistro = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+                    # grava spread
+                    sql_lanc.inserir(
+                        data_parcela, rot, conta_spread, valor_parcela, sinal_spread,
+                        hist, f"{compl} PARC {i+1}/{parcelas}", conta_capa_local, dataregistro,
+                        lote_parc, seq_parc, "WEB", comprovante
+                    )
+
+                    # grava capa
+                    sql_lanc.inserir(
+                        data_parcela, rot, conta_capa_local, valor_parcela, sinal_capa,
+                        hist, f"{compl} PARC {i+1}/{parcelas}", conta_spread, dataregistro,
+                        lote_parc, seq_parc + 1, "WEB", comprovante
+                    )
+
+                    adicionar_linha_spread(
+                        data_parcela.day,
                         conta_spread,
                         hist,
-                        compl_parcela,
+                        f"{compl} PARC {i+1}/{parcelas}",
                         f"{valor_parcela:.2f}".replace(".", ","),
+                        sinal_spread,
                         dataregistro,
-                        arquivo if arquivo else nome_old,
+                        os.path.basename(comprovante),
                         comprovante,
-                        datalancto_parcela
+                        data_parcela.strftime("%Y-%m-%d")
                     )
-                )
 
-                seq += 1
+                    mes_parc += 1
+                    if mes_parc > 12:
+                        mes_parc = 1
+                        ano_parc += 1
 
-            tree.insert("", tk.END, values=("", conta_spread, hist, "", "", "", "", "", ""))
+                calcular_saldos()
+                limpar_campos()
+                carregar_comprovantes()
+                messagebox.showinfo("OK", "Parcelamento gravado.")
+                return
 
-            limpar_campos()
-            messagebox.showinfo("OK", "Lançamento gravado.")
+            # ===========================
+            # GRAVAÇÃO NORMAL (SEM PARCELAS)
+            # ===========================
+            lote = f"{rot}-{data_base.year}{str(data_base.month).zfill(2)}"
+            sequencialote = sql_lanc.proximo_sequencial_lote(lote)
+            dataregistro = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+            sql_lanc.inserir(
+                data_base, rot, conta_spread, valor_float_abs, sinal_spread,
+                hist, compl, conta_capa_local, dataregistro,
+                lote, sequencialote, "WEB", comprovante
+            )
+
+            sql_lanc.inserir(
+                data_base, rot, conta_capa_local, valor_float_abs, sinal_capa,
+                hist, compl, conta_spread, dataregistro,
+                lote, sequencialote + 1, "WEB", comprovante
+            )
+
+            adicionar_linha_spread(
+                dia,
+                conta_spread,
+                hist,
+                compl,
+                valor_digitado,
+                sinal_spread,
+                dataregistro,
+                os.path.basename(comprovante),
+                comprovante,
+                data_base.strftime("%Y-%m-%d")
+            )
+
             calcular_saldos()
-            carregar()
+            limpar_campos()
+            carregar_comprovantes()
+            messagebox.showinfo("OK", "Lançamento gravado.")
 
         except Exception as e:
-            messagebox.showerror("Erro ao gravar", str(e))
+            messagebox.showerror("Erro", f"Erro ao gravar:\n{e}")
+
 
 
     def ajustar_data_lancamento(data_real, dia_corte):
         """
-        Se o lançamento ocorrer no dia do corte ou depois,
-        grava como dia 28 do mês seguinte.
+        Ajusta a competência para o mês seguinte quando a data da compra
+        é igual ou superior ao dia de corte do cartão.
         """
         if data_real.day >= dia_corte:
-            # mês seguinte
             data_comp = data_real + relativedelta(months=1)
             return data_comp.replace(day=28)
         else:
-            # mês atual
             return data_real
+        
+    def mover_lancamento():
+        if not janela.selected_original:
+            messagebox.showwarning("Mover", "Selecione um lançamento gravado.")
+            return
+
+        orig = janela.selected_original
+
+        # descobrir conta origem e conta despesa
+        conta_origem = orig["conta_spread"]
+        conta_despesa = None
+
+        # buscar a outra linha do par
+        linhas = sql_lanc.buscar_par(orig["datafull"], orig["compweb"], orig["valor"])
+        for l in linhas:
+            if l[1] != conta_origem:
+                conta_despesa = l[1]
+
+        if not conta_despesa:
+            messagebox.showerror("Erro", "Não foi possível identificar a conta de despesa.")
+            return
+
+        # janela para escolher novo roteiro e conta origem
+        win = tk.Toplevel(janela)
+        win.title("Mover Lançamento")
+        win.geometry("400x200")
+        win.grab_set()
+
+        tk.Label(win, text="Novo Roteiro").pack(pady=5)
+        combo_novo_rot = ttk.Combobox(win, values=[f"{r[0]} - {r[2]}" for r in sql_capa.listar()], width=40)
+        combo_novo_rot.pack()
+
+        tk.Label(win, text="Nova Conta de Origem").pack(pady=5)
+        combo_nova_conta = ttk.Combobox(win, values=[c[0] for c in sql_conta.listar()], width=40)
+        combo_nova_conta.pack()
+
+        def confirmar():
+            novo_rot = combo_novo_rot.get().split(" - ")[0]
+            nova_conta_origem = combo_nova_conta.get().strip()
+
+            if not novo_rot or not nova_conta_origem:
+                messagebox.showwarning("Mover", "Escolha roteiro e conta.")
+                return
+
+            try:
+                # excluir par antigo
+                sql_lanc.excluir_lancamento_duplo(
+                    orig["datafull"],
+                    conta_origem,
+                    orig["hist"],
+                    orig["compl"],
+                    float(orig["valor"]),
+                    orig["compweb"]
+                )
+
+                # recriar par novo
+                sql_lanc.inserir_lancamento_duplo(
+                    data=orig["datafull"],
+                    conta_origem=nova_conta_origem,
+                    conta_despesa=conta_despesa,
+                    historico=orig["hist"],
+                    compl=orig["compl"],
+                    valor=float(orig["valor"]),
+                    compweb=orig["compweb"],
+                    roteiro=novo_rot
+                )
+
+                messagebox.showinfo("OK", "Lançamento movido com sucesso.")
+                win.destroy()
+                carregar()
+
+            except Exception as e:
+                messagebox.showerror("Erro", f"Erro ao mover:\n{e}")
+
+        tk.Button(win, text="Confirmar", command=confirmar).pack(pady=20)
+
 
     # ===========================
     # BOTÕES
@@ -937,3 +1124,5 @@ def tela_lancamentos():
     tk.Button(frame_buttons, text="Excluir Linha", command=excluir_linha).pack(side="left", padx=10)
     tk.Button(frame_buttons, text="Gravar Linha", command=gravar_linha).pack(side="left", padx=10)
     tk.Button(frame_buttons, text="Finalizar", command=janela.destroy).pack(side="left", padx=10)
+    tk.Button(frame_buttons, text="Mover Lançamento", command=mover_lancamento).pack(side="left", padx=10)
+

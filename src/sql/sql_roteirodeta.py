@@ -57,7 +57,6 @@ def excluir(rot, deb, cred):
     cur = conn.cursor()
     cur.execute("""
         DELETE FROM ROTEIRODETA
-        SET ROTNATUREZA=%s, ROTCTADEB=%s, ROTCTACRED=%s, ROTHIST=%s
-        WHERE ROTEIRO=%s AND ROTCTADEB= AND ROTCTACRED=%s
+        WHERE ROTEIRO=%s AND ROTCTADEB=%s AND ROTCTACRED=%s
     """, (rot, deb, cred))
     conn.commit()

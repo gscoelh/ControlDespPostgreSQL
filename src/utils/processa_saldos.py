@@ -5,7 +5,7 @@ from src.sql import sql_saldos, sql_lancamentos, sql_cadconta
 cancelar_flag = False
 
 SALDOS_INICIAIS = {
-    "10101": 1500.00,   # exemplo
+    "10101": -338.20,   # exemplo
 }
 
 def gerar_saldos_iniciais():
